@@ -1,0 +1,158 @@
+// Prisma schema for the Multi-Calendar Booking Platform
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  calendars        Calendar[]
+  googleConnection GoogleConnection?
+
+  @@map("users")
+}
+
+model Calendar {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  name             String
+  slug             String   @unique
+  description      String?
+  timezone         String   @default("America/Los_Angeles")
+  durationMinutes  Int      @default(30) @map("duration_minutes")
+  bufferMinutes    Int      @default(0) @map("buffer_minutes")
+  isActive         Boolean  @default(true) @map("is_active")
+  googleCalendarId String?  @map("google_calendar_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  availabilityRules AvailabilityRule[]
+  blockedTimes      BlockedTime[]
+  bookings          Booking[]
+  urgentRequests    UrgentRequest[]
+
+  @@index([userId])
+  @@map("calendars")
+}
+
+// One row per weekday time-window. Multiple rows per weekday = multiple windows.
+model AvailabilityRule {
+  id         String   @id @default(cuid())
+  calendarId String   @map("calendar_id")
+  weekday    Int // 0 = Sunday ... 6 = Saturday
+  startTime  String   @map("start_time") // "HH:mm" local to calendar timezone
+  endTime    String   @map("end_time") // "HH:mm"
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@index([calendarId, weekday])
+  @@map("availability_rules")
+}
+
+// Manual blocks. If startTime/endTime are null, the entire date is blocked.
+model BlockedTime {
+  id         String   @id @default(cuid())
+  calendarId String   @map("calendar_id")
+  date       DateTime @db.Date
+  startTime  String?  @map("start_time") // "HH:mm" or null for full-day
+  endTime    String?  @map("end_time")
+  reason     String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@index([calendarId, date])
+  @@map("blocked_times")
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+model Booking {
+  id              String        @id @default(cuid())
+  calendarId      String        @map("calendar_id")
+  customerName    String        @map("customer_name")
+  customerEmail   String        @map("customer_email")
+  customerPhone   String?       @map("customer_phone")
+  message         String?
+  appointmentDate DateTime      @map("appointment_date") @db.Date
+  startTime       String        @map("start_time") // "HH:mm" local to calendar timezone
+  endTime         String        @map("end_time")
+  startsAt        DateTime      @map("starts_at") // absolute UTC instant
+  endsAt          DateTime      @map("ends_at") // absolute UTC instant
+  timezone        String
+  status          BookingStatus @default(CONFIRMED)
+  googleEventId   String?       @map("google_event_id")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  // Prevent identical double-booking at the DB level.
+  @@unique([calendarId, startsAt], name: "calendar_slot_unique")
+  @@index([calendarId, appointmentDate])
+  @@index([status])
+  @@index([customerEmail])
+  @@map("bookings")
+}
+
+enum UrgentStatus {
+  NEW
+  CONTACTED
+  RESOLVED
+}
+
+// Urgent / emergency call requests submitted when no slot works.
+model UrgentRequest {
+  id         String       @id @default(cuid())
+  calendarId String?      @map("calendar_id")
+  firstName  String       @map("first_name")
+  fullName   String       @map("full_name")
+  email      String
+  phone      String
+  note       String?
+  status     UrgentStatus @default(NEW)
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+
+  calendar Calendar? @relation(fields: [calendarId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("urgent_requests")
+}
+
+model GoogleConnection {
+  id           String   @id @default(cuid())
+  userId       String   @unique @map("user_id")
+  googleEmail  String   @map("google_email")
+  accessToken  String   @map("access_token") // encrypted
+  refreshToken String   @map("refresh_token") // encrypted
+  expiresAt    DateTime @map("expires_at")
+  calendarId   String   @default("primary") @map("calendar_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("google_connections")
+}
